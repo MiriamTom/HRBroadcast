@@ -24,9 +24,15 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.hr_broadcast.MQTT.MqttManager;
+import com.google.firebase.FirebaseApp;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.firestore.FirebaseFirestore;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public class MainActivity extends AppCompatActivity {
@@ -52,15 +58,14 @@ public class MainActivity extends AppCompatActivity {
     private List<Device> deviceList = new ArrayList<>();
 
     private MqttManager mqttManager;
+    private boolean isScanning = false;
+
+    FirebaseFirestore db = FirebaseFirestore.getInstance();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
-        // Inicializácia MQTT Managera
-        mqttManager = MqttManager.getInstance();
-        mqttManager.connect();
 
         recyclerView = findViewById(R.id.recyclerViewDevices); // Use the class-level variable
         deviceAdapter = new DeviceAdapter(deviceList);
@@ -74,6 +79,20 @@ public class MainActivity extends AppCompatActivity {
         deviceList.add(new Device("Huawei Band 6"));
         deviceList.add(new Device("Mi Band 7"));
 
+        FirebaseApp.initializeApp(this);
+
+        new Thread(() -> {
+            FirebaseAuth auth = FirebaseAuth.getInstance();
+            auth.signInAnonymously()
+                    .addOnCompleteListener(task -> {
+                        if (task.isSuccessful()) {
+                            FirebaseUser user = auth.getCurrentUser();
+                            Log.d("FirebaseAuth", "Anonymous sign-in successful: " + user.getUid());
+                        } else {
+                            Log.e("FirebaseAuth", "Anonymous sign-in failed", task.getException());
+                        }
+                    });
+        }).start();
     }
 
     @Override
@@ -100,6 +119,7 @@ public class MainActivity extends AppCompatActivity {
             initializeBluetoothAndScan();
         }
     }
+
     private void initializeBluetoothAndScan() {
         initializeBluetooth();
         startScan();
@@ -125,7 +145,10 @@ public class MainActivity extends AppCompatActivity {
             bluetoothAdapter = bluetoothManager.getAdapter();
             if (bluetoothAdapter != null && bluetoothAdapter.isEnabled()) {
                 bluetoothLeScanner = bluetoothAdapter.getBluetoothLeScanner();
-                startScan();
+                if (bluetoothLeScanner != null && !isScanning) {
+                    isScanning = true;
+                    startScan();
+                }
             } else {
                 Log.e("Bluetooth", "Bluetooth nie je zapnutý.");
             }
@@ -165,7 +188,6 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-
         @Override
         public void onScanFailed(int errorCode) {
             Log.e("BluetoothScan", "Scan failed with error: " + errorCode);
@@ -186,9 +208,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void connectToDevice(BluetoothDevice device) {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-            bluetoothGatt = device.connectGatt(this, false, gattCallback);
+            new Thread(() -> {
+                bluetoothGatt = device.connectGatt(this, false, gattCallback);
+            }).start();
             deviceName = device.getName();
-            //runOnUiThread(() -> deviceAdapter.notifyDataSetChanged());  // Aktualizácia UI
         } else {
             Log.e("BluetoothConnect", "Missing BLUETOOTH_CONNECT permission");
         }
@@ -221,14 +244,13 @@ public class MainActivity extends AppCompatActivity {
                         if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
                             gatt.setCharacteristicNotification(heartRateCharacteristic, true);
 
-                            // Nastavenie Client Characteristic Configuration Descriptor (CCCD)
+                            // Set CCCD
                             BluetoothGattDescriptor descriptor = heartRateCharacteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG_UUID);
                             if (descriptor != null) {
                                 descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
                                 gatt.writeDescriptor(descriptor);
                                 onCharacteristicChanged(gatt, heartRateCharacteristic);
                             }
-
                         }
                     }
                 }
@@ -244,15 +266,15 @@ public class MainActivity extends AppCompatActivity {
                     Log.d("HeartRate", "Received heart rate data (RAW): " + bytesToHex(data));
 
                     runOnUiThread(() -> deviceAdapter.updateHeartRate(deviceName, heartRate));
-                    mqttManager.sendCustomMessage( "/Realtime" + deviceName, String.valueOf(heartRate));
+                   // mqttManager.sendCustomMessage( "/Realtime" + deviceName, String.valueOf(heartRate));
 
                     Log.d("HeartRate", "Parsed heart rate: " + heartRate + " bpm");
 
-
                     String deviceId = deviceName;
-                    MqttManager.getInstance().sendData(deviceId, "heartRate", String.valueOf(heartRate));
+                  //  MqttManager.getInstance().sendData(deviceId, "heartRate", String.valueOf(heartRate));
 
-
+                    // ✅ Save to Firestore
+                    saveHeartRateToFirestore(deviceId, heartRate);
                 } else {
                     Log.w("HeartRate", "Received empty heart rate data");
                 }
@@ -260,12 +282,12 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
-    // Pomocné metódy
+    // Helper methods
     private int parseHeartRate(byte[] data) {
         if ((data[0] & 0x01) == 0) {
-            return data[1] & 0xFF;  // 8-bit hodnota
+            return data[1] & 0xFF;  // 8-bit value
         } else {
-            return ((data[2] & 0xFF) << 8) | (data[1] & 0xFF);  // 16-bit hodnota
+            return ((data[2] & 0xFF) << 8) | (data[1] & 0xFF);  // 16-bit value
         }
     }
 
@@ -277,8 +299,16 @@ public class MainActivity extends AppCompatActivity {
         return sb.toString().trim();
     }
 
+    private void saveHeartRateToFirestore(String deviceId, int heartRate) {
+        Map<String, Object> heartRateData = new HashMap<>();
+        heartRateData.put("deviceId", deviceId);
+        heartRateData.put("heartRate", heartRate);
+        heartRateData.put("timestamp", System.currentTimeMillis());
 
-
+        db.collection("heartRateData").add(heartRateData)
+                .addOnSuccessListener(docRef -> Log.d("Firestore", "Heart rate saved: " + docRef.getId()))
+                .addOnFailureListener(e -> Log.e("Firestore", "Error saving data", e));
+    }
 
     @SuppressLint("MissingPermission")
     @Override
