@@ -15,7 +15,7 @@ HR Broadcast je Android aplikácia na zobrazovanie a ukladanie informácií o za
 ---
 
 ## 🔧 **Technológie**  
-- **Kotlin / Java**  
+- **Java**  
 - **Android Jetpack (ViewModel, LiveData, Navigation)**  
 - **RecyclerView**  
 - **Firebase Firestore**  
