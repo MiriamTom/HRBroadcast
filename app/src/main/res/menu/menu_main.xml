@@ -1,0 +1,14 @@
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/mainFragment"
+        android:icon="@drawable/ic_home_black_24dp"
+        android:title="Hlavná obrazovka" />
+    <item
+        android:id="@+id/loginFragment"
+        android:icon="@android:drawable/ic_lock_idle_lock"
+        android:title="Prihlásenie" />
+    <item
+        android:id="@+id/userProfileFragment"
+        android:icon="@android:drawable/ic_menu_myplaces"
+        android:title="Profil" />
+</menu>

@@ -1,5 +1,4 @@
 package com.example.hr_broadcast;
-
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.bluetooth.*;
@@ -9,35 +8,47 @@ import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.graphics.Color;
 import android.os.Bundle;
 import android.os.ParcelUuid;
 import android.util.Log;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.ActionBarDrawerToggle;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.Toolbar;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.drawerlayout.widget.DrawerLayout;
+import androidx.lifecycle.ViewModelProvider;
+import androidx.navigation.NavController;
+
+import androidx.navigation.fragment.NavHostFragment;
+import androidx.navigation.ui.NavigationUI;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.hr_broadcast.MQTT.MqttManager;
+import com.google.android.material.bottomnavigation.BottomNavigationView;
+import com.google.android.material.navigation.NavigationView;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.FirebaseFirestore;
-
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+
 
 public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_BLUETOOTH_PERMISSIONS = 1;
-    private static final String DEVICE_NAME = "YourDeviceName";
     private static final UUID HEART_RATE_SERVICE_UUID = UUID.fromString("0000180D-0000-1000-8000-00805F9B34FB");
     private static final UUID HEART_RATE_MEASUREMENT_UUID = UUID.fromString("00002A37-0000-1000-8000-00805F9B34FB");
     private static final UUID CLIENT_CHARACTERISTIC_CONFIG_UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB");
@@ -46,58 +57,137 @@ public class MainActivity extends AppCompatActivity {
     private BluetoothLeScanner bluetoothLeScanner;
     private BluetoothGatt bluetoothGatt;
 
-    private TextView deviceNameTextView;
-    private TextView heartRateTextView;
-    private HeartbeatAnimationView heartbeatAnimationView;
     private String deviceName;
-
-    private List<String> users = new ArrayList<>();
-
-    private RecyclerView recyclerView;
-    private DeviceAdapter deviceAdapter;
     private List<Device> deviceList = new ArrayList<>();
+    private DeviceAdapter deviceAdapter;
 
     private MqttManager mqttManager;
     private boolean isScanning = false;
 
     FirebaseFirestore db = FirebaseFirestore.getInstance();
+    private FirebaseAuth mAuth;
+    private TextView statusTextView;
+    private String userEmail = "Not logged in";
+    private Toolbar toolbar;
+
+    private NavController navController;
+    private BottomNavigationView bottomNavigationView;
+    private DrawerLayout drawerLayout;
+    private NavigationView navigationView;
+    SharedViewModel viewModel;
+    private Set<String> addedDeviceNames = new HashSet<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        viewModel = new ViewModelProvider(this).get(SharedViewModel.class);
 
-        recyclerView = findViewById(R.id.recyclerViewDevices); // Use the class-level variable
+        // Initialize RecyclerView
+      //  recyclerView = findViewById(R.id.recyclerViewDevices);
         deviceAdapter = new DeviceAdapter(deviceList);
+      //  recyclerView.setAdapter(deviceAdapter);
 
-        recyclerView.setAdapter(deviceAdapter);
-        recyclerView.setLayoutManager(new LinearLayoutManager(this));
-        recyclerView.setBackgroundColor(Color.parseColor("#0C6B37"));
+        viewModel.getDeviceList().observe(this, devices -> {
+            addedDeviceNames.clear();  // Clear HashSet before repopulating
+            List<Device> newDeviceList = new ArrayList<>(deviceList); // Create a copy of the list
 
-        Log.d("RecyclerView", "Setting adapter...");
-        Log.d("RecyclerView", "Device list size: " + deviceList.size());
-        deviceList.add(new Device("Huawei Band 6"));
-        deviceList.add(new Device("Mi Band 7"));
+            for (Device device : devices) {
+                if (device.getName() != null && !addedDeviceNames.contains(device.getName())) {
+                    newDeviceList.add(device);
+                    addedDeviceNames.add(device.getName());
+                }
+            }
 
+            deviceList.clear();
+            deviceList.addAll(newDeviceList);
+            deviceAdapter.notifyDataSetChanged();
+        });
+
+
+        // Initialize NavController for navigation handling
+        NavHostFragment navHostFragment = (NavHostFragment) getSupportFragmentManager()
+                .findFragmentById(R.id.nav_host_fragment);
+        if (navHostFragment != null) {
+            navController = navHostFragment.getNavController();
+        } else {
+            Log.e("MainActivity", "NavHostFragment is null");
+        }
+
+        toolbar = findViewById(R.id.toolbar);
+        setSupportActionBar(toolbar);
+
+        DrawerLayout drawerLayout = findViewById(R.id.drawerLayout);
+        NavigationView navigationView = findViewById(R.id.navigationView);
+
+        ActionBarDrawerToggle toggle = new ActionBarDrawerToggle(
+                this, drawerLayout, toolbar, R.string.openDrawer, R.string.closeDrawer);
+        drawerLayout.addDrawerListener(toggle);
+        toggle.syncState();
+
+        if (navController != null) {
+            NavigationUI.setupWithNavController(navigationView, navController);
+        }
+
+        bottomNavigationView = findViewById(R.id.bottomNavigationView);
+
+
+        NavigationUI.setupWithNavController(bottomNavigationView, navController);
+        mAuth = FirebaseAuth.getInstance();
         FirebaseApp.initializeApp(this);
 
-        new Thread(() -> {
-            FirebaseAuth auth = FirebaseAuth.getInstance();
-            auth.signInAnonymously()
-                    .addOnCompleteListener(task -> {
-                        if (task.isSuccessful()) {
-                            FirebaseUser user = auth.getCurrentUser();
-                            Log.d("FirebaseAuth", "Anonymous sign-in successful: " + user.getUid());
-                        } else {
-                            Log.e("FirebaseAuth", "Anonymous sign-in failed", task.getException());
-                        }
-                    });
-        }).start();
+        db = FirebaseFirestore.getInstance();
+
+        statusTextView = findViewById(R.id.statusTextView);
+
+        FirebaseUser currentUser = mAuth.getCurrentUser();
+        if (currentUser != null) {
+            userEmail = currentUser.getEmail();
+        }
+
+        updateStatusText();
+
     }
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.menu_main, menu);
+        return true;
+    }
+
+
+    @Override
+    public boolean onOptionsItemSelected(@NonNull MenuItem item) {
+        if (item.getItemId() == R.id.mainFragment) {
+            navController.navigate(R.id.mainFragment);
+            Log.d("MenuItem", "Selected: " + item.getItemId());
+
+            return true;
+        } else if (item.getItemId() == R.id.loginFragment) {
+            navController.navigate(R.id.loginFragment);
+            Log.d("MenuItem", "Selected: " + item.getItemId());
+
+            return true;
+        } else if (item.getItemId() == R.id.userProfileFragment) {
+            navController.navigate(R.id.userProfileFragment);
+            Log.d("MenuItem", "Selected: " + item.getItemId());
+
+            return true;
+        } else {
+            return super.onOptionsItemSelected(item);
+        }
+    }
+
 
     @Override
     protected void onStart() {
         super.onStart();
+        FirebaseUser currentUser = mAuth.getCurrentUser();
+        if (currentUser != null) {
+            Log.d("MainActivity", "User is logged in: " + currentUser.getEmail());
+        } else {
+            startActivity(new Intent(this, LoginFragment.class));
+            finish();
+        }
         requestPermissionsAndInitialize();
     }
 
@@ -177,12 +267,8 @@ public class MainActivity extends AppCompatActivity {
             BluetoothDevice device = result.getDevice();
             if (device.getName() != null && !deviceNameExists(device.getName())) {
                 Log.d("BluetoothScan", "Device found: " + device.getName());
-
-                runOnUiThread(() -> {
-                    deviceList.add(new Device(device.getName()));
-                    deviceAdapter.notifyItemInserted(deviceList.size() - 1);  // Použi notifyItemInserted
-                    Log.d("RecyclerView", "Device list size: " + deviceList.size());
-                });
+                runOnUiThread(() -> addDeviceIfNotExists(device));
+                viewModel.updateDeviceList(deviceList);
 
                 connectToDevice(device);
             }
@@ -193,16 +279,33 @@ public class MainActivity extends AppCompatActivity {
             Log.e("BluetoothScan", "Scan failed with error: " + errorCode);
         }
     };
+    public void updateDeviceList(List<Device> devices) {
+        if (deviceAdapter != null) {
 
-    // Helper method to check if the device is already in the list
-    private boolean deviceNameExists(String name) {
-        for (Device device : deviceList) {
-            if (device.getName().equals(name)) {
-                return true;
-            }
+            deviceList.addAll(devices);
+            deviceAdapter.notifyDataSetChanged();
         }
-        return false;
     }
+    private boolean deviceNameExists(String name) {
+        if (name == null) return false; // Ak je null, považujeme ho za neexistujúci
+        return addedDeviceNames.contains(name);
+    }
+
+    @SuppressLint("MissingPermission")
+    public void addDeviceIfNotExists(BluetoothDevice device) {
+        String deviceName = device.getName();
+        if (deviceName != null && !addedDeviceNames.contains(deviceName)) {
+            Log.d("DeviceList", "Pridávam nové zariadenie: " + deviceName);
+            Device newDevice = new Device(device); // Vytvor nový objekt Device
+            deviceList.add(newDevice);
+            addedDeviceNames.add(deviceName); // Ulož názov zariadenia do HashSet-u
+            deviceAdapter.notifyDataSetChanged();
+        } else {
+            Log.d("DeviceList", "Zariadenie už existuje: " + deviceName);
+        }
+    }
+
+
 
     private BluetoothGattCharacteristic heartRateCharacteristic;
 
@@ -265,15 +368,17 @@ public class MainActivity extends AppCompatActivity {
                     int heartRate = parseHeartRate(data);
                     Log.d("HeartRate", "Received heart rate data (RAW): " + bytesToHex(data));
 
+                    runOnUiThread(() -> viewModel.updateHeartRate(deviceName, heartRate));
                     runOnUiThread(() -> deviceAdapter.updateHeartRate(deviceName, heartRate));
-                   // mqttManager.sendCustomMessage( "/Realtime" + deviceName, String.valueOf(heartRate));
+
+                    // mqttManager.sendCustomMessage( "/Realtime" + deviceName, String.valueOf(heartRate));
 
                     Log.d("HeartRate", "Parsed heart rate: " + heartRate + " bpm");
 
                     String deviceId = deviceName;
                   //  MqttManager.getInstance().sendData(deviceId, "heartRate", String.valueOf(heartRate));
 
-                    // ✅ Save to Firestore
+                    // Save to Firestore
                     saveHeartRateToFirestore(deviceId, heartRate);
                 } else {
                     Log.w("HeartRate", "Received empty heart rate data");
@@ -282,7 +387,6 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
-    // Helper methods
     private int parseHeartRate(byte[] data) {
         if ((data[0] & 0x01) == 0) {
             return data[1] & 0xFF;  // 8-bit value
@@ -301,15 +405,20 @@ public class MainActivity extends AppCompatActivity {
 
     private void saveHeartRateToFirestore(String deviceId, int heartRate) {
         Map<String, Object> heartRateData = new HashMap<>();
-        heartRateData.put("deviceId", deviceId);
+        heartRateData.put("name", deviceId);
         heartRateData.put("heartRate", heartRate);
         heartRateData.put("timestamp", System.currentTimeMillis());
 
-        db.collection("heartRateData").add(heartRateData)
+        db.collection("devices").add(heartRateData)
                 .addOnSuccessListener(docRef -> Log.d("Firestore", "Heart rate saved: " + docRef.getId()))
                 .addOnFailureListener(e -> Log.e("Firestore", "Error saving data", e));
     }
 
+
+    private void updateStatusText() {
+        String status = "User status: " + userEmail + "\n";
+        statusTextView.setText(status);
+    }
     @SuppressLint("MissingPermission")
     @Override
     protected void onDestroy() {

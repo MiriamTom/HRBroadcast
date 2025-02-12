@@ -26,11 +26,15 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.ViewHolder
     @Override
     public void onBindViewHolder(ViewHolder holder, int position) {
         Device device = deviceList.get(position);
+        Log.d("DeviceAdapter", "Binding device: " + device.getName());
 
         holder.deviceNameTextView.setText(device.getName());
         holder.heartRateTextView.setText("Heart Rate: " + device.getHeartRate() + " bpm");
-
         holder.heartbeatAnimationView.setHeartRate(device.getHeartRate());
+    }
+    public void updateDeviceList(List<Device> newDevices) {
+        this.deviceList = newDevices;
+        notifyDataSetChanged();
     }
 
     @Override
@@ -56,9 +60,8 @@ public class DeviceAdapter extends RecyclerView.Adapter<DeviceAdapter.ViewHolder
     public void updateHeartRate(String deviceName, int heartRate) {
         for (int i = 0; i < deviceList.size(); i++) {
             if (deviceList.get(i).getName().equals(deviceName)) {
-                deviceList.get(i).setHeartRate(heartRate);
-                notifyItemChanged(i);  // Aktualizácia konkrétneho riadku
-
+                deviceList.get(i).setHeartRate(heartRate);  // Update heart rate of the device
+                notifyItemChanged(i);  // Notify adapter to refresh the item at position i
                 Log.d("DeviceAdapter", "Updated heart rate for " + deviceName + ": " + heartRate);
                 break;
             }
